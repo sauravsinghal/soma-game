@@ -85,6 +85,40 @@ canvas { display:block; position:absolute; top:0; left:0; }
 
 @keyframes dmg{0%,100%{filter:none}50%{filter:brightness(3) saturate(0)}}
 .damage { animation:dmg 0.3s; }
+
+/* JOYSTICK */
+#joystick-zone {
+  position:fixed; bottom:60px; left:24px;
+  width:130px; height:130px;
+  z-index:50; pointer-events:all;
+  display:none; /* shown only on touch */
+  touch-action:none;
+}
+#joystick-base {
+  position:absolute; inset:0; border-radius:50%;
+  background:rgba(57,255,20,0.06);
+  border:2px solid rgba(57,255,20,0.25);
+  box-shadow:0 0 20px rgba(57,255,20,0.1);
+}
+#joystick-base::before {
+  content:''; position:absolute; inset:20px; border-radius:50%;
+  border:1px solid rgba(57,255,20,0.1);
+}
+#joystick-knob {
+  position:absolute;
+  width:52px; height:52px; border-radius:50%;
+  background:rgba(57,255,20,0.18);
+  border:2px solid rgba(57,255,20,0.7);
+  box-shadow:0 0 16px rgba(57,255,20,0.5);
+  top:50%; left:50%;
+  transform:translate(-50%,-50%);
+  transition:box-shadow 0.1s;
+  pointer-events:none;
+}
+#joystick-knob.active {
+  box-shadow:0 0 30px rgba(57,255,20,0.9), 0 0 60px rgba(57,255,20,0.3);
+  background:rgba(57,255,20,0.3);
+}
 </style>
 </head>
 <body>
@@ -157,6 +191,12 @@ canvas { display:block; position:absolute; top:0; left:0; }
     </div>
   </div>
 
+  <!-- JOYSTICK -->
+  <div id="joystick-zone">
+    <div id="joystick-base"></div>
+    <div id="joystick-knob"></div>
+  </div>
+
   <!-- IG MODAL -->
   <div id="ig-modal">
     <h2>SHARE YOUR SCORE</h2>
@@ -214,7 +254,7 @@ const LEVELS=[
 ];
 
 let state='start',player,signals,chaos,particles,vitality,score,totalCollected,currentLevel,timeLeft,timer,cmTO;
-let keys={},touchX=null,touchY=null,lastTime=0;
+let keys={},lastTime=0;
 let fScore=0,fCollected=0,fLevel=1,fWin=false;
 
 function createPlayer(){return{x:gc.width/2,y:gc.height/2,r:22,vx:0,vy:0,speed:255,trail:[],pulseT:0,invincible:0};}
@@ -297,9 +337,66 @@ function endGame(win){
 
 window.addEventListener('keydown',e=>{keys[e.key]=true;});
 window.addEventListener('keyup',e=>{keys[e.key]=false;});
-gc.addEventListener('touchstart',e=>{e.preventDefault();const t=e.touches[0];touchX=t.clientX;touchY=t.clientY;},{passive:false});
-gc.addEventListener('touchmove',e=>{e.preventDefault();const t=e.touches[0];touchX=t.clientX;touchY=t.clientY;},{passive:false});
-gc.addEventListener('touchend',()=>{touchX=touchY=null;});
+
+// ─── JOYSTICK ────────────────────────────────────────────────────
+const jZone  = document.getElementById('joystick-zone');
+const jKnob  = document.getElementById('joystick-knob');
+const JR     = 65;   // base radius
+const KR     = 26;   // knob radius (half of 52px)
+let joystickDx = 0, joystickDy = 0;
+let jActive = false, jTouchId = null;
+
+function isTouchDevice(){ return window.matchMedia('(pointer:coarse)').matches; }
+
+function showJoystick(){
+  if(isTouchDevice()){
+    jZone.style.display='block';
+  }
+}
+
+function getJZoneCenter(){
+  const r=jZone.getBoundingClientRect();
+  return{cx:r.left+r.width/2, cy:r.top+r.height/2};
+}
+
+jZone.addEventListener('touchstart',e=>{
+  e.preventDefault();
+  if(jActive) return;
+  const t=e.changedTouches[0];
+  jTouchId=t.identifier;
+  jActive=true;
+  jKnob.classList.add('active');
+  updateJoystick(t.clientX,t.clientY);
+},{passive:false});
+
+jZone.addEventListener('touchmove',e=>{
+  e.preventDefault();
+  for(const t of e.changedTouches){
+    if(t.identifier===jTouchId) updateJoystick(t.clientX,t.clientY);
+  }
+},{passive:false});
+
+jZone.addEventListener('touchend',e=>{
+  for(const t of e.changedTouches){
+    if(t.identifier===jTouchId){
+      jActive=false; jTouchId=null;
+      joystickDx=0; joystickDy=0;
+      jKnob.style.transform='translate(-50%,-50%)';
+      jKnob.classList.remove('active');
+    }
+  }
+},{passive:false});
+
+function updateJoystick(cx,cy){
+  const{cx:bx,cy:by}=getJZoneCenter();
+  let dx=cx-bx, dy=cy-by;
+  const dist=Math.sqrt(dx*dx+dy*dy);
+  const maxDist=JR-KR;
+  if(dist>maxDist){ dx=dx/dist*maxDist; dy=dy/dist*maxDist; }
+  joystickDx=dx/maxDist;
+  joystickDy=dy/maxDist;
+  jKnob.style.transform=`translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+}
 
 function drawSomaLogo(cx,cy,size,a=1){
   ctx.save();ctx.globalAlpha=a;ctx.translate(cx,cy);
@@ -333,7 +430,8 @@ function loop(ts){
     if(keys['ArrowRight']||keys['d']||keys['D'])dx=1;
     if(keys['ArrowUp']||keys['w']||keys['W'])dy=-1;
     if(keys['ArrowDown']||keys['s']||keys['S'])dy=1;
-    if(touchX!==null){dx=touchX-player.x;dy=touchY-player.y;const m=Math.sqrt(dx*dx+dy*dy);if(m>0){dx/=m;dy/=m;}}
+    // Joystick overrides keyboard on touch
+    if(jActive){ dx=joystickDx; dy=joystickDy; }
     const len=Math.sqrt(dx*dx+dy*dy);
     if(len>0){player.vx+=(dx/len*player.speed-player.vx)*8*dt;player.vy+=(dy/len*player.speed-player.vy)*8*dt;}
     else{player.vx*=0.85;player.vy*=0.85;}
@@ -474,6 +572,7 @@ document.getElementById('start-btn').addEventListener('click',()=>{
   document.getElementById('hud').style.display='flex';
   document.getElementById('vitality-wrap').style.display='flex';
   initGame();state='playing';
+  showJoystick();
   const b=document.getElementById('level-banner');
   document.getElementById('lb-name').textContent=LEVELS[0].name;
   document.getElementById('lb-desc').textContent=LEVELS[0].desc;
